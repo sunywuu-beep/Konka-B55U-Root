@@ -1,0 +1,26 @@
+# Extracted from B55U_PERSIST_RESULT.txt, 2026-10-27
+B55U_INSTALL_BEGIN
+uid=0(root) gid=0(root)
+FACTORY_INIT_BOOT_ENTRY:
+/init.rc:545:service flash_recovery /system/etc/install-recovery.sh
+BOOT_HOOK_FOUND
+BOOT_HOOK_INSTALLED:
+/system/etc/install-recovery.sh
+SYSTEM_MOUNT_FINAL:
+/system: ro
+B55U_INSTALL_END
+
+# Subsequent reboot confirmed by user on Windows
+connected to <TV_IP>:5555
+uid=0(root) gid=0(root)
+
+# From B55U_bootroot.log on TV after reboot
+B55U_BOOT_ROOT_BEGIN
+uid=0(root) gid=0(root)
+STATE_AFTER:
+running
+ADB_ROOT_SETTING:
+1
+TCP_SETTING:
+5555
+B55U_BOOT_ROOT_END

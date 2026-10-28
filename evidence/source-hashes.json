@@ -1,0 +1,57 @@
+[
+  {
+    "filename": "B55U_eshell_check.txt",
+    "sha256": "5684f8799c8c6646d4e067b8fb0255397f287343353b447ac6b89a2337a52e6d",
+    "bytes": 93
+  },
+  {
+    "filename": "B55U_probe_A.log",
+    "sha256": "9075931fb256994c9689261beafcee2e1d1bb99bf086c2e47c859c78cd8140d8",
+    "bytes": 20
+  },
+  {
+    "filename": "B55U_probe_B.log",
+    "sha256": "9075931fb256994c9689261beafcee2e1d1bb99bf086c2e47c859c78cd8140d8",
+    "bytes": 20
+  },
+  {
+    "filename": "B55U_service_report.txt",
+    "sha256": "6c05f4af877178bda835e6e15f0edc969014f006d5b7e54d9145e55c876d2f2a",
+    "bytes": 21386
+  },
+  {
+    "filename": "B55U_tvos_id.txt",
+    "sha256": "ac352e0f45e72935209b81b53b1e797423e552dee8f5c11cbd9a633500a3ccea",
+    "bytes": 24
+  },
+  {
+    "filename": "B55U_PERSIST_RESULT.txt",
+    "sha256": "23fe3ed33a71a7fbb4bb7909fa5a0a8894a6b73d65a8b436da6a2b1aab3b2640",
+    "bytes": 2714
+  },
+  {
+    "filename": "packages_disabled_20261027_220855.txt",
+    "sha256": "b6800a4286cc789299bfbde7a97d7ae4a691da21b20ee0957821c57a1c3aa32a",
+    "bytes": 188
+  },
+  {
+    "filename": "packages_disabled_20261027_221010.txt",
+    "sha256": "f50f124ede70887616f0b448beffc9b2f8fa7d14de7c055c60c73f628ae746ae",
+    "bytes": 307
+  },
+  {
+    "filename": "after_disabled_20261027_221023.txt",
+    "sha256": "f343900cd26c8b75a431499efc1de3e2e9d1fdf6a5c19a345ee5d0b5ddc442f6",
+    "bytes": 428
+  },
+  {
+    "filename": "disk_20261027_221010.txt",
+    "sha256": "fbb8c7c9cbeb95a1c25a47408074e569ad58d2e3b1c7984ef8a2b519dbdb5f6d",
+    "bytes": 1015
+  },
+  {
+    "filename": "memory_20261027_221010.txt",
+    "sha256": "f028314bb3c67edabff74fd68279185f2a542277d96d1dcb1c9d7dcfc7d1f7f2",
+    "bytes": 1409
+  }
+]

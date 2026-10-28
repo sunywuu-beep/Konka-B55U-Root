@@ -1,0 +1,18 @@
+# Do not publish ADB secrets, identifiers, private logs, or unlicensed firmware
+adbkey
+adbkey.pub
+adb_keys
+*.key
+*.p12
+*.keystore
+*.apk
+*.img
+*.bin
+*.elf
+B55U_autotest_client
+*.log
+!evidence/*.log
+audit-output/
+package-state/
+*.zip
+.DS_Store
