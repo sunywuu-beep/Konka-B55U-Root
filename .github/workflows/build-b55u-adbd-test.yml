@@ -1,0 +1,69 @@
+name: B55U Android 4.4 adbd ARM32 (isolated test candidate)
+
+on:
+  push:
+    branches: [adbd-fix]
+    paths:
+      - '.github/workflows/build-b55u-adbd-test.yml'
+      - 'adbd-build/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+
+      - name: Install Android SDK tooling
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK (API 19 ARM32)
+        run: sdkmanager --install 'ndk;23.2.8568313'
+
+      - name: Fetch pinned KitKat-derived standalone adbd
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/ajiang17/android-adbd-for-linux.git build/source
+          cd build/source
+          git checkout --detach ba0f0fd06acaa28d6d264818a1703e462b8bfbbc
+
+      - name: Apply test-only connection fix and isolate listeners
+        run: python3 adbd-build/prepare.py build/source
+
+      - name: Cross compile static ARM32 Android API19 executable
+        shell: bash
+        run: |
+          set -euxo pipefail
+          NDK_ROOT="$ANDROID_HOME/ndk/23.2.8568313"
+          CC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi19-clang"
+          test -x "$CC"
+          make -C build/source -j2 CC="$CC" LDFLAGS=-static LIBS=
+          mkdir -p build/out
+          cp build/source/adbd build/out/B55U_adbd_fixed_test
+          chmod 755 build/out/B55U_adbd_fixed_test
+
+      - name: Check ELF architecture and dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          file build/out/B55U_adbd_fixed_test
+          readelf -h build/out/B55U_adbd_fixed_test | tee build/out/elf-header.txt
+          readelf -l build/out/B55U_adbd_fixed_test | tee build/out/program-headers.txt
+          readelf -d build/out/B55U_adbd_fixed_test | tee build/out/dynamic.txt || true
+          grep -q 'Machine:.*ARM' build/out/elf-header.txt
+          ! grep -q 'INTERP' build/out/program-headers.txt
+          sha256sum build/out/B55U_adbd_fixed_test | tee build/out/sha256.txt
+          printf '%s\n' 'EXPERIMENTAL mini-adbd, not a production /sbin/adbd replacement. No RSA/JDWP/USB. Port 5556 only; accepts 192.168.0.131.' > build/out/READ_THIS_FIRST.txt
+
+      - name: Upload test binary (never auto-install)
+        uses: actions/upload-artifact@v4
+        with:
+          name: B55U-adbd-ARM32-TEST-ONLY
+          path: build/out/
+          if-no-files-found: error
