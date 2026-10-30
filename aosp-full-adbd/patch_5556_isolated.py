@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fail-closed isolation patch for the already transport-patched AOSP 4.4.4_r2 adbd.
+"""Fail-closed, full-AOSP-4.4.4-r2 test-only adbd isolation patch.
 
-This creates a TEST-only build with TCP:5556, a single allowed maintenance-PC IP,
-existing-key RSA auth (ro.adb.secure=1), and no init-owned USB/JDWP/5037 sockets.
-The unmodified production candidate must be built/packaged BEFORE this runs.
+Requires patch_transport.py to have already applied the production fix.
+Does NOT modify original production binary, only the AOSP source tree for
+second compilation. Never install resulting binary as /sbin/adbd.
 """
 from pathlib import Path
 import ipaddress
@@ -17,27 +17,28 @@ ip = ipaddress.IPv4Address(sys.argv[2])
 if not ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
     raise SystemExit('ABORT: test client must be a private, non-loopback IPv4 address')
 
-adb_file = root / 'adb/adb.c'
-local_file = root / 'adb/transport_local.c'
-orig_adb = adb_file.read_text()
-orig_local = local_file.read_text()
-adb = orig_adb
-loc = orig_local
+paths = {
+    'adb.c': root / 'adb/adb.c',
+    'transport_local.c': root / 'adb/transport_local.c',
+    'services.c': root / 'adb/services.c',
+    'sockets.c': root / 'adb/sockets.c',
+}
+originals = {key: path.read_text() for key, path in paths.items()}
+changed = dict(originals)
 
 def replace_exact(source, old, new, label):
-    if source.count(old) != 1:
-        raise SystemExit(f'ABORT: expected exactly one {label}, got {source.count(old)}')
+    n = source.count(old)
+    if n != 1:
+        raise SystemExit(f'ABORT: expected exactly one {label}, found {n}')
     return source.replace(old, new, 1)
 
-# 1. Require secure authentication, only already-approved ADB public keys.
-# No framework/auth control socket registration by second daemon; approval of a
-# NEW key is deliberately unavailable in test mode (fail closed).
+adb = changed['adb.c']
 old = '''    property_get("ro.adb.secure", value, "0");
     auth_enabled = !strcmp(value, "1");
     if (auth_enabled)
         adb_auth_init();
 '''
-new = '''    /* B55U_5556_ISOLATED: RSA must remain enabled. No new key approvals. */
+new = '''    /* B55U_5556_ISOLATED: RSA verification required, no new key approvals. */
     property_get("ro.adb.secure", value, "0");
     auth_enabled = !strcmp(value, "1");
     if (!auth_enabled) fatal("B55U test refuses unauthenticated ADB");
@@ -45,76 +46,125 @@ new = '''    /* B55U_5556_ISOLATED: RSA must remain enabled. No new key approval
         access("/adb_keys", R_OK) != 0) {
         fatal("B55U test requires a pre-approved ADB key file");
     }
-    /* Do not call adb_auth_init(): its Android init socket belongs to stock adbd. */
+    /* Do not call adb_auth_init(): init-owned control socket belongs to stock. */
 '''
-adb = replace_exact(adb, old, new, 'ro.adb.secure authentication initialization')
+adb = replace_exact(adb, old, new, 'ADB RSA authentication initialization')
 
-# 2. Do not drop privileges or register local smartsocket/5037; retain the
-# standard AOSP should_drop_privileges decision to verify expected TV settings.
-start = '    if (should_drop_privileges()) {\n'
-end = '    int usb = 0;\n'
+start, end = '    if (should_drop_privileges()) {\n', '    int usb = 0;\n'
 if adb.count(start) != 1 or adb.count(end) != 1:
-    raise SystemExit('ABORT: expected AOSP adbd privilege/USB anchors not found')
+    raise SystemExit('ABORT: unexpected KitKat privilege section')
 a, b = adb.index(start), adb.index(end)
 if a >= b:
-    raise SystemExit('ABORT: incorrect privilege block ordering')
+    raise SystemExit('ABORT: privilege-section markers out of order')
 block = adb[a:b]
-for required in ('install_listener(local_name, "*smartsocket*", NULL, 0)', 'setuid(AID_SHELL)', 'setgid(AID_SHELL)'):
+for required in ('install_listener(local_name, "*smartsocket*", NULL, 0)',
+                 'setuid(AID_SHELL)', 'setgid(AID_SHELL)'):
     if required not in block:
-        raise SystemExit(f'ABORT: missing expected privilege-block marker: {required}')
-adb = adb[:a] + '''    /* B55U_5556_ISOLATED: require the already-established Root ADB setting. */
+        raise SystemExit('ABORT: missing expected privilege code: ' + required)
+adb = adb[:a] + '''    /* B55U_5556_ISOLATED: root only; do not claim 5037/smartsocket. */
     if (should_drop_privileges()) {
         fatal("B55U test requires ro.debuggable=1 and service.adb.root=1");
     }
-    /* No smartsocket/5037 listener; it remains owned by the stock daemon. */
 
 ''' + adb[b:]
 
-# 3. No USB claim, no JDWP-control bind, do not read global TCP properties 5555.
 start = '    int usb = 0;\n'
 end = '    D("adb_main(): post init_jdwp()\\n");\n'
 if adb.count(start) != 1 or adb.count(end) != 1:
-    raise SystemExit('ABORT: cannot safely isolate USB/TCP/JDWP initialization')
+    raise SystemExit('ABORT: unexpected KitKat USB/TCP/JDWP section')
 a, b = adb.index(start), adb.index(end) + len(end)
 part = adb[a:b]
-for mark in ('usb_init();', 'local_init(port);', 'init_jdwp();', 'service.adb.tcp.port'):
-    if mark not in part:
-        raise SystemExit(f'ABORT: missing expected device initialization: {mark}')
-adb = adb[:a] + '''    /* B55U_5556_ISOLATED: only TCP 5556, no USB / JDWP control. */
+for required in ('usb_init();', 'local_init(port);', 'init_jdwp();', 'service.adb.tcp.port'):
+    if required not in part:
+        raise SystemExit('ABORT: missing expected service init: ' + required)
+adb = adb[:a] + '''    /* B55U_5556_ISOLATED: TCP 5556 only, no USB/JDWP binding. */
     local_init(5556);
 ''' + adb[b:]
+changed['adb.c'] = adb
 
-# 4. Source-IP allowlist in the TCP accept loop; keep existing host-fd collision fix.
+loc = changed['transport_local.c']
 start = 'static void *server_socket_thread(void * arg)'
 end = '    D("transport: server_socket_thread() exiting\\n");'
 if loc.count(start) != 1 or loc.count(end) != 1:
-    raise SystemExit('ABORT: unexpected transport socket thread anchors')
+    raise SystemExit('ABORT: unexpected transport loop anchors')
 a, b = loc.index(start), loc.index(end)
 section = loc[a:b]
 if section.count('snprintf(serial, sizeof(serial), "host-%d", fd);') != 1:
-    raise SystemExit('ABORT: transport collision fix missing')
+    raise SystemExit('ABORT: production transport collision fix not present')
 old = '''        if(fd >= 0) {
             D("server: new connection on fd %d\\n", fd);'''
 new = '''        if(fd >= 0) {
-            /* B55U_5556_ISOLATED: reject every host except the maintenance PC. */
+            /* B55U_5556_ISOLATED: reject all peers except the maintenance PC. */
             if (addr.sa_family != AF_INET ||
                 ((struct sockaddr_in *)&addr)->sin_addr.s_addr != inet_addr("''' + str(ip) + '''")) {
                 adb_close(fd);
                 continue;
             }
             D("server: new connection on fd %d\\n", fd);'''
-section = replace_exact(section, old, new, 'peer-IP admission point')
+section = replace_exact(section, old, new, 'TCP peer admission point')
 loc = loc[:a] + section + loc[b:]
-loc = replace_exact(loc, '#include <stdio.h>\n', '#include <stdio.h>\n#include <arpa/inet.h>\n#include <netinet/in.h>\n', 'network include')
+loc = replace_exact(loc, '#include <stdio.h>\n',
+                    '#include <stdio.h>\n#include <arpa/inet.h>\n#include <netinet/in.h>\n',
+                    'network header')
+changed['transport_local.c'] = loc
 
-# No writes until all anchors are checked.
-adb_file.write_text(adb)
-local_file.write_text(loc)
+# JDWP global lists are initialized by init_jdwp(). The isolated daemon MUST
+# NOT bind its abstract socket, so reject these entrypoints to avoid null list
+# dereferences when an ADB host issues `adb jdwp` or `track-jdwp`.
+sockets = changed['sockets.c']
+old = '''#if !ADB_HOST
+    if (!strcmp(name,"jdwp")) {
+        return create_jdwp_service_socket();
+    }
+    if (!strcmp(name,"track-jdwp")) {
+        return create_jdwp_tracker_service_socket();
+    }
+#endif
+'''
+new = '''#if !ADB_HOST
+    /* B55U_5556_ISOLATED: JDWP global lists were never initialized. */
+    if (!strcmp(name,"jdwp") || !strcmp(name,"track-jdwp")) {
+        return NULL;
+    }
+#endif
+'''
+sockets = replace_exact(sockets, old, new, 'JDWP service socket dispatch')
+changed['sockets.c'] = sockets
+
+# Prevent the isolated daemon from changing global ADB mode, rebooting the TV,
+# remounting system, or invoking JDWP PID dispatch (also needs init_jdwp).
+services = changed['services.c']
+old = '''int service_to_fd(const char *name)
+{
+    int ret = -1;
+'''
+new = '''int service_to_fd(const char *name)
+{
+    int ret = -1;
+#if !ADB_HOST
+    /* B55U_5556_ISOLATED: these services affect the stock daemon/TV or
+       need JDWP initialization. Shell, sync, log and file services remain. */
+    if (!strncmp(name, "jdwp:", 5) || !strncmp(name, "reboot:", 7) ||
+        !strncmp(name, "remount:", 8) || !strncmp(name, "root:", 5) ||
+        !strncmp(name, "tcpip:", 6) || !strncmp(name, "usb:", 4) ||
+        !strncmp(name, "backup:", 7) || !strncmp(name, "restore:", 8)) {
+        return -1;
+    }
+#endif
+'''
+services = replace_exact(services, old, new, 'service dispatch guard')
+changed['services.c'] = services
+
+# Fail closed: do not partially patch a source tree if an anchor fails.
+for key, file in paths.items():
+    file.write_text(changed[key])
+
 print('B55U_5556_ISOLATION_PATCH_PASS')
-print('Allowed maintenance-PC IPv4:', ip)
-print('Root and ro.adb.secure=1 enforced; existing ADB key required.')
-print('TCP 5556 only; 5037/USB/JDWP init suppressed; 5555 stock untouched.')
-for path, prev, now in [('adb.c', orig_adb, adb), ('transport_local.c', orig_local, loc)]:
+print('Allowed maintenance host IPv4:', ip)
+print('Root+RSA key checks enabled; no ADB auth/USB/JDWP/5037 init')
+print('JDWP and global-state-changing ADB services rejected in test mode')
+for key in paths:
+    prev, now = originals[key], changed[key]
     print(''.join(difflib.unified_diff(prev.splitlines(True), now.splitlines(True),
-                                     fromfile=f'AOSP-original/{path}',
-                                     tofile=f'B55U-5556-test/{path}')))
+                                      fromfile=f'AOSP-original/{key}',
+                                      tofile=f'B55U-5556-test/{key}')))
