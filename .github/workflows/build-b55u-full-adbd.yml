@@ -175,7 +175,7 @@ jobs:
             -v "$GITHUB_WORKSPACE/aosp:/aosp" \
             -v "$GITHUB_WORKSPACE/aosp-full-adbd:/b55u:ro" \
             -w /aosp \
-            "$KITKAT_BUILD_IMAGE" /bin/bash /b55u/build_in_container.sh \
+            "$KITKAT_BUILD_IMAGE" /b55u/build_in_container.sh \
             2>&1 | tee build-diagnostics/5556-test-build.log
 
       - name: Inspect and package 5556 isolated test binary
