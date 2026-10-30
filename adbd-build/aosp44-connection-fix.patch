@@ -1,0 +1,24 @@
+diff --git a/adb/transport_local.c b/adb/transport_local.c
+--- a/adb/transport_local.c
++++ b/adb/transport_local.c
+@@ -157,5 +157,6 @@ static void *server_socket_thread(void * arg)
+ {
+     int serverfd, fd;
++    char serial[32];
+     struct sockaddr addr;
+     socklen_t alen;
+     int port = (int)arg;
+@@ -181,6 +182,12 @@ static void *server_socket_thread(void * arg)
+             D("server: new connection on fd %d\n", fd);
+             close_on_exec(fd);
+             disable_tcp_nagle(fd);
+-            register_socket_transport(fd, "host", port, 1);
++            /* Each accepted TCP connection needs its own transport identity.
++             * On registration failure, the accepted socket belongs to this
++             * function and must be closed to avoid CLOSE_WAIT/FD leaks. */
++            snprintf(serial, sizeof(serial), "host-%d", fd);
++            if (register_socket_transport(fd, serial, port, 1) != 0) {
++                adb_close(fd);
++            }
+         }
+     }
