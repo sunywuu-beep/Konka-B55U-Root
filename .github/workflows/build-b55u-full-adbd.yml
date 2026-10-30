@@ -1,0 +1,165 @@
+
+name: B55U Full AOSP 4.4 adbd (preflight + optional build)
+
+on:
+  push:
+    branches: [adbd-fix]
+    paths:
+      - '.github/workflows/build-b55u-full-adbd.yml'
+      - 'aosp-full-adbd/**'
+  workflow_dispatch:
+    inputs:
+      full_build:
+        description: 'Run full AOSP download and adbd build after preflight (default: false)'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  full-adbd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      AOSP_TAG: android-4.4.4_r2
+      KITKAT_BUILD_IMAGE: registry.gitlab.com/unofficial-aosp/docker-aosp:kitkat
+
+    steps:
+      - name: Checkout build instructions
+        uses: actions/checkout@v5
+
+      - name: Free disk space only for full build
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          df -h /
+          sudo rm -rf /usr/local/lib/android/sdk /usr/share/dotnet /usr/local/share/powershell \
+            /opt/ghc /usr/share/swift /usr/local/julia* /usr/local/lib/node_modules || true
+          docker image prune -af || true
+          df -h /
+
+      - name: Preflight KitKat image and build tools (no AOSP download)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-diagnostics
+          echo "Checking candidate image: $KITKAT_BUILD_IMAGE"
+          timeout 600 docker pull "$KITKAT_BUILD_IMAGE" \
+            2>&1 | tee build-diagnostics/docker-pull.log
+          docker image inspect "$KITKAT_BUILD_IMAGE" \
+            --format '{{.Id}} {{json .RepoDigests}}' \
+            | tee build-diagnostics/image-id.txt
+
+          docker run --rm -i \
+            --entrypoint /bin/bash \
+            "$KITKAT_BUILD_IMAGE" -s <<'CHECK_TOOLS' 2>&1 \
+            | tee build-diagnostics/preflight.log
+          set -euo pipefail
+          echo "=== Java 6 ==="
+          command -v java
+          java -version 2>&1 | tee /tmp/b55u-java-version.txt
+          grep -Eq 'version "1\.6\.' /tmp/b55u-java-version.txt
+          command -v javac
+          javac -version 2>&1
+          echo "=== Make ==="
+          command -v make
+          make --version | head -n 1
+          echo "=== Python 2.7 ==="
+          if command -v python2 >/dev/null 2>&1; then
+            py=python2
+          else
+            py=python
+          fi
+          "$py" --version 2>&1 | tee /tmp/b55u-python-version.txt
+          grep -Eq 'Python 2\.7' /tmp/b55u-python-version.txt
+          echo "=== Host C/C++ compiler ==="
+          command -v gcc
+          gcc --version | head -n 1
+          command -v g++
+          g++ --version | head -n 1
+          echo "KITKAT_PREFLIGHT_PASS"
+          CHECK_TOOLS
+          df -h /
+
+      - name: Install repo client (full build only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl --retry 4 -fL https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/.local/bin/repo"
+          chmod 755 "$HOME/.local/bin/repo"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/repo" --version || true
+
+      - name: Download complete AOSP Android 4.4.4 source (full build only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p aosp
+          cd aosp
+          "$HOME/.local/bin/repo" init --depth=1 \
+            -u https://android.googlesource.com/platform/manifest \
+            -b "$AOSP_TAG" --no-repo-verify
+          "$HOME/.local/bin/repo" sync -c --no-tags -j4 --fail-fast
+          df -h /
+          du -sh .
+
+      - name: Apply bounded transport fix (full build only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 aosp-full-adbd/patch_transport.py aosp/system/core \
+            | tee aosp-full-adbd-patch.log
+          grep -q 'jdwp_service.c' aosp/system/core/adb/Android.mk
+          grep -q 'adb_auth_client.c' aosp/system/core/adb/Android.mk
+          grep -q 'usb_linux_client.c' aosp/system/core/adb/Android.mk
+
+      - name: Build full KitKat adbd (full build only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build-diagnostics
+          docker run --rm \
+            --entrypoint /bin/bash \
+            -v "$GITHUB_WORKSPACE/aosp:/aosp" \
+            -v "$GITHUB_WORKSPACE/aosp-full-adbd:/b55u:ro" \
+            -w /aosp \
+            "$KITKAT_BUILD_IMAGE" /b55u/build_in_container.sh \
+            2>&1 | tee build-diagnostics/full-build.log
+
+      - name: Inspect and package candidate (full build only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 aosp-full-adbd/inspect_candidate.py aosp build-output
+          cp aosp-full-adbd-patch.log build-output/
+          df -h /
+
+      - name: Upload candidate (review only, never install)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: B55U-FULL-AOSP44-adbd-REVIEW-ONLY
+          path: build-output/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostics (also on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: B55U-FULL-AOSP44-build-diagnostics
+          path: |
+            build-diagnostics/
+            aosp-full-adbd-patch.log
+          if-no-files-found: ignore
+          retention-days: 7
