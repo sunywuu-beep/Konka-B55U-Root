@@ -1,5 +1,4 @@
-
-name: B55U Full AOSP 4.4 adbd (preflight + optional build)
+name: B55U Full AOSP 4.4 adbd (production + isolated 5556 test)
 
 on:
   push:
@@ -10,10 +9,20 @@ on:
   workflow_dispatch:
     inputs:
       full_build:
-        description: 'Run full AOSP download and adbd build after preflight (default: false)'
+        description: 'Download AOSP and build full adbd (default: false)'
         required: true
         type: boolean
         default: false
+      isolated_test:
+        description: 'Also build isolated 5556 test candidate (requires full_build=true)'
+        required: true
+        type: boolean
+        default: false
+      test_peer_ip:
+        description: 'Only IP allowed to connect to test daemon on 5556'
+        required: true
+        type: string
+        default: '192.168.0.131'
 
 permissions:
   contents: read
@@ -25,7 +34,6 @@ jobs:
     env:
       AOSP_TAG: android-4.4.4_r2
       KITKAT_BUILD_IMAGE: registry.gitlab.com/unofficial-aosp/docker-aosp:kitkat
-
     steps:
       - name: Checkout build instructions
         uses: actions/checkout@v5
@@ -46,41 +54,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-diagnostics
-          echo "Checking candidate image: $KITKAT_BUILD_IMAGE"
-          timeout 600 docker pull "$KITKAT_BUILD_IMAGE" \
-            2>&1 | tee build-diagnostics/docker-pull.log
+          timeout 600 docker pull "$KITKAT_BUILD_IMAGE" 2>&1 | tee build-diagnostics/docker-pull.log
           docker image inspect "$KITKAT_BUILD_IMAGE" \
             --format '{{.Id}} {{json .RepoDigests}}' \
             | tee build-diagnostics/image-id.txt
-
-          docker run --rm -i \
-            --entrypoint /bin/bash \
-            "$KITKAT_BUILD_IMAGE" -s <<'CHECK_TOOLS' 2>&1 \
-            | tee build-diagnostics/preflight.log
+          docker run --rm -i --entrypoint /bin/bash "$KITKAT_BUILD_IMAGE" -s \
+            <<'CHECK_TOOLS' 2>&1 | tee build-diagnostics/preflight.log
           set -euo pipefail
-          echo "=== Java 6 ==="
-          command -v java
-          java -version 2>&1 | tee /tmp/b55u-java-version.txt
-          grep -Eq 'version "1\.6\.' /tmp/b55u-java-version.txt
-          command -v javac
+          java -version 2>&1 | tee /tmp/java-version.txt
+          grep -Eq 'version "1\.6\.' /tmp/java-version.txt
           javac -version 2>&1
-          echo "=== Make ==="
-          command -v make
-          make --version | head -n 1
-          echo "=== Python 2.7 ==="
-          if command -v python2 >/dev/null 2>&1; then
-            py=python2
-          else
-            py=python
-          fi
-          "$py" --version 2>&1 | tee /tmp/b55u-python-version.txt
-          grep -Eq 'Python 2\.7' /tmp/b55u-python-version.txt
-          echo "=== Host C/C++ compiler ==="
-          command -v gcc
-          gcc --version | head -n 1
-          command -v g++
-          g++ --version | head -n 1
-          echo "KITKAT_PREFLIGHT_PASS"
+          make --version | head -1
+          if command -v python2 >/dev/null 2>&1; then py=python2; else py=python; fi
+          "$py" --version 2>&1 | tee /tmp/python-version.txt
+          grep -Eq 'Python 2\.7' /tmp/python-version.txt
+          gcc --version | head -1
+          g++ --version | head -1
+          echo KITKAT_PREFLIGHT_PASS
           CHECK_TOOLS
           df -h /
 
@@ -96,7 +86,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/repo" --version || true
 
-      - name: Download complete AOSP Android 4.4.4 source (full build only)
+      - name: Download complete AOSP Android 4.4.4 source
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
         shell: bash
         run: |
@@ -110,7 +100,7 @@ jobs:
           df -h /
           du -sh .
 
-      - name: Apply bounded transport fix (full build only)
+      - name: Apply production TCP transport collision fix
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
         shell: bash
         run: |
@@ -121,34 +111,28 @@ jobs:
           grep -q 'adb_auth_client.c' aosp/system/core/adb/Android.mk
           grep -q 'usb_linux_client.c' aosp/system/core/adb/Android.mk
 
-
-      - name: Build full KitKat adbd (full build only)
+      - name: Build full production AOSP adbd (not installed)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p build-diagnostics
-          echo "Runner UID:GID = $(id -u):$(id -g)"
           test -w aosp
-
           docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            --env HOME=/tmp \
+            --user "$(id -u):$(id -g)" --env HOME=/tmp \
             --entrypoint /bin/bash \
             -v "$GITHUB_WORKSPACE/aosp:/aosp" \
             -v "$GITHUB_WORKSPACE/aosp-full-adbd:/b55u:ro" \
             -w /aosp \
             "$KITKAT_BUILD_IMAGE" -c '
               set -euo pipefail
-              id
-              touch /aosp/.b55u-write-test
-              rm /aosp/.b55u-write-test
+              touch /aosp/.b55u-write-test && rm /aosp/.b55u-write-test
               mkdir -p /aosp/out
               echo B55U_BUILD_WRITABLE_PASS
               exec /bin/bash /b55u/build_in_container.sh
             ' 2>&1 | tee build-diagnostics/full-build.log
 
-      - name: Inspect and package candidate (full build only)
+      - name: Inspect production candidate
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
         shell: bash
         run: |
@@ -157,7 +141,7 @@ jobs:
           cp aosp-full-adbd-patch.log build-output/
           df -h /
 
-      - name: Upload candidate (review only, never install)
+      - name: Upload production candidate (review only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
         uses: actions/upload-artifact@v4
         with:
@@ -166,7 +150,75 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload diagnostics (also on failure)
+      - name: Patch isolated test runtime (5556, authorized host only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true && inputs.isolated_test == true }}
+        shell: bash
+        env:
+          TEST_PEER_IP: ${{ inputs.test_peer_ip }}
+        run: |
+          set -euxo pipefail
+          test -n "$TEST_PEER_IP"
+          python3 aosp-full-adbd/patch_5556_isolated.py \
+            aosp/system/core "$TEST_PEER_IP" \
+            | tee build-diagnostics/5556-isolation-patch.log
+          grep -q 'B55U_5556_ISOLATED' aosp/system/core/adb/adb.c
+          grep -q 'local_init(5556)' aosp/system/core/adb/adb.c
+
+      - name: Rebuild isolated 5556 test daemon (not installed)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true && inputs.isolated_test == true }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker run --rm \
+            --user "$(id -u):$(id -g)" --env HOME=/tmp \
+            --entrypoint /bin/bash \
+            -v "$GITHUB_WORKSPACE/aosp:/aosp" \
+            -v "$GITHUB_WORKSPACE/aosp-full-adbd:/b55u:ro" \
+            -w /aosp \
+            "$KITKAT_BUILD_IMAGE" /bin/bash /b55u/build_in_container.sh \
+            2>&1 | tee build-diagnostics/5556-test-build.log
+
+      - name: Inspect and package 5556 isolated test binary
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true && inputs.isolated_test == true }}
+        shell: bash
+        env:
+          TEST_PEER_IP: ${{ inputs.test_peer_ip }}
+        run: |
+          set -euxo pipefail
+          mkdir -p test-output
+          cp aosp/out/target/product/generic/root/sbin/adbd \
+            test-output/B55U_full_AOSP44_adbd_5556_ISOLATED_TEST
+          chmod 755 test-output/B55U_full_AOSP44_adbd_5556_ISOLATED_TEST
+          BIN=test-output/B55U_full_AOSP44_adbd_5556_ISOLATED_TEST
+          file "$BIN" | tee test-output/elf-file.txt
+          readelf -hW "$BIN" | tee test-output/elf-header.txt
+          readelf -lW "$BIN" | tee test-output/elf-program-headers.txt
+          readelf -SW "$BIN" > test-output/elf-sections.txt
+          grep -q 'Machine:.*ARM' test-output/elf-header.txt
+          grep -q 'Class:.*ELF32' test-output/elf-header.txt
+          ! grep -q 'INTERP ' test-output/elf-program-headers.txt
+          grep -aq 'B55U_5556_ISOLATED' "$BIN"
+          ! cmp -s "$BIN" build-output/B55U_full_AOSP44_adbd_candidate
+          sha256sum "$BIN" | tee test-output/sha256.txt
+          printf '%s\n' \
+            'TEST ONLY: not for /sbin/adbd, init services, or autorun.' \
+            'Only TCP 5556; no 5037 smartsocket, USB, or JDWP control listeners.' \
+            'Preserves RSA checking for already-authorized host keys (ro.adb.secure=1).' \
+            "Only accepts TCP from maintenance PC IPv4: $TEST_PEER_IP" \
+            'Original 5555 adbd remains untouched. Run manually and supervised.' \
+            > test-output/READ_FIRST.txt
+          cp build-diagnostics/5556-isolation-patch.log test-output/
+
+      - name: Upload 5556 isolated test binary (not for installation)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true && inputs.isolated_test == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: B55U-FULL-AOSP44-5556-ISOLATED-TEST-ONLY
+          path: test-output/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostics even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
