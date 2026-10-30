@@ -28,7 +28,6 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" --install "ndk;23.2.8568313"
 
-
       - name: Fetch pinned KitKat-derived standalone adbd
         shell: bash
         run: |
@@ -47,22 +46,42 @@ jobs:
           NDK_ROOT="$ANDROID_HOME/ndk/23.2.8568313"
           CC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi19-clang"
           test -x "$CC"
+
+          # Static NDK libc supplies an 8-byte-aligned .tdata section.
+          # ARM Bionic requires an executable PT_TLS alignment >= 32 bytes.
+          # Add a real, 32-byte-aligned initialized TLS object before linking.
+          cat > build/source/b55u_tls_align.c <<'EOF'
+          __thread char b55u_tls_align_anchor[32]
+              __attribute__((aligned(32), used)) = {1};
+          EOF
+          grep -q '^SRCS+= adb.c$' build/source/Makefile
+          sed -i '/^SRCS+= adb.c$/a SRCS+= b55u_tls_align.c' build/source/Makefile
+          grep -q '^SRCS+= b55u_tls_align.c$' build/source/Makefile
+
           make -C build/source -j2 CC="$CC" LDFLAGS=-static LIBS=
           mkdir -p build/out
           cp build/source/adbd build/out/B55U_adbd_fixed_test
           chmod 755 build/out/B55U_adbd_fixed_test
 
-      - name: Check ELF architecture and dependencies
+      - name: Check ELF architecture, TLS alignment and dependencies
         shell: bash
         run: |
           set -euxo pipefail
-          file build/out/B55U_adbd_fixed_test
-          readelf -h build/out/B55U_adbd_fixed_test | tee build/out/elf-header.txt
-          readelf -l build/out/B55U_adbd_fixed_test | tee build/out/program-headers.txt
-          readelf -d build/out/B55U_adbd_fixed_test | tee build/out/dynamic.txt || true
+          BIN=build/out/B55U_adbd_fixed_test
+          file "$BIN"
+          readelf -h "$BIN" | tee build/out/elf-header.txt
+          readelf -lW "$BIN" | tee build/out/program-headers.txt
+          readelf -d "$BIN" | tee build/out/dynamic.txt || true
           grep -q 'Machine:.*ARM' build/out/elf-header.txt
           ! grep -q 'INTERP' build/out/program-headers.txt
-          sha256sum build/out/B55U_adbd_fixed_test | tee build/out/sha256.txt
+
+          # Fail the build if PT_TLS is not present or is underaligned.
+          TLS_ALIGN="$(awk '$1=="TLS" {print $NF}' build/out/program-headers.txt)"
+          test -n "$TLS_ALIGN"
+          echo "PT_TLS p_align=$TLS_ALIGN"
+          (( 16#${TLS_ALIGN#0x} >= 32 ))
+
+          sha256sum "$BIN" | tee build/out/sha256.txt
           printf '%s\n' 'EXPERIMENTAL mini-adbd, not a production /sbin/adbd replacement. No RSA/JDWP/USB. Port 5556 only; accepts 192.168.0.131.' > build/out/READ_THIS_FIRST.txt
 
       - name: Upload test binary (never auto-install)
