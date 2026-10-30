@@ -121,19 +121,32 @@ jobs:
           grep -q 'adb_auth_client.c' aosp/system/core/adb/Android.mk
           grep -q 'usb_linux_client.c' aosp/system/core/adb/Android.mk
 
+
       - name: Build full KitKat adbd (full build only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p build-diagnostics
+          echo "Runner UID:GID = $(id -u):$(id -g)"
+          test -w aosp
+
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
             --entrypoint /bin/bash \
             -v "$GITHUB_WORKSPACE/aosp:/aosp" \
             -v "$GITHUB_WORKSPACE/aosp-full-adbd:/b55u:ro" \
             -w /aosp \
-            "$KITKAT_BUILD_IMAGE" /b55u/build_in_container.sh \
-            2>&1 | tee build-diagnostics/full-build.log
+            "$KITKAT_BUILD_IMAGE" -c '
+              set -euo pipefail
+              id
+              touch /aosp/.b55u-write-test
+              rm /aosp/.b55u-write-test
+              mkdir -p /aosp/out
+              echo B55U_BUILD_WRITABLE_PASS
+              exec /b55u/build_in_container.sh
+            ' 2>&1 | tee build-diagnostics/full-build.log
 
       - name: Inspect and package candidate (full build only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true }}
