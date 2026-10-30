@@ -1,0 +1,117 @@
+name: B55U Full AOSP 4.4 adbd (build only)
+
+on:
+  push:
+    branches: [adbd-fix]
+    paths:
+      - '.github/workflows/build-b55u-full-adbd.yml'
+      - 'aosp-full-adbd/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-adbd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      AOSP_TAG: android-4.4.4_r2
+      KITKAT_BUILD_IMAGE: kylemanna/aosp:4.4-kitkat
+    steps:
+      - name: Checkout build instructions
+        uses: actions/checkout@v5
+
+      - name: Free runner disk space and record capacity
+        shell: bash
+        run: |
+          set -euxo pipefail
+          df -h /
+          # Only delete preinstalled SDKs not required by this workflow.
+          sudo rm -rf /usr/local/lib/android/sdk /usr/share/dotnet /usr/local/share/powershell \
+            /opt/ghc /usr/share/swift /usr/local/julia* /usr/local/lib/node_modules || true
+          docker image prune -af || true
+          df -h /
+
+      - name: Check historical KitKat build image is available
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker pull "$KITKAT_BUILD_IMAGE"
+          docker image inspect "$KITKAT_BUILD_IMAGE" --format '{{.Id}}'
+          df -h /
+
+      - name: Install current repo client on the runner (not in legacy container)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl --retry 4 -fL https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/.local/bin/repo"
+          chmod 755 "$HOME/.local/bin/repo"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/repo" --version || true
+
+      - name: Shallow checkout complete Android 4.4.4 source manifest
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p aosp
+          cd aosp
+          "$HOME/.local/bin/repo" init --depth=1 \
+            -u https://android.googlesource.com/platform/manifest \
+            -b "$AOSP_TAG" --no-repo-verify
+          # AOSP 4.4 is still large. Do NOT sync full git history or tags.
+          "$HOME/.local/bin/repo" sync -c --no-tags -j4 --fail-fast
+          df -h /
+          du -sh .
+
+      - name: Apply bounded transport fix in full original AOSP source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 aosp-full-adbd/patch_transport.py aosp/system/core \
+            | tee aosp-full-adbd-patch.log
+          grep -q 'jdwp_service.c' aosp/system/core/adb/Android.mk
+          grep -q 'adb_auth_client.c' aosp/system/core/adb/Android.mk
+          grep -q 'usb_linux_client.c' aosp/system/core/adb/Android.mk
+
+      - name: Build full KitKat adbd using legacy AOSP toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build-diagnostics
+          docker run --rm \
+            --entrypoint /bin/bash \
+            -v "$GITHUB_WORKSPACE/aosp:/aosp" \
+            -v "$GITHUB_WORKSPACE/aosp-full-adbd:/b55u:ro" \
+            -w /aosp \
+            "$KITKAT_BUILD_IMAGE" /b55u/build_in_container.sh \
+            2>&1 | tee build-diagnostics/full-build.log
+
+      - name: Inspect and package full AOSP candidate (not installed)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 aosp-full-adbd/inspect_candidate.py aosp build-output
+          cp aosp-full-adbd-patch.log build-output/
+          df -h /
+
+      - name: Upload full AOSP binary candidate for offline review
+        uses: actions/upload-artifact@v4
+        with:
+          name: B55U-FULL-AOSP44-adbd-REVIEW-ONLY
+          path: build-output/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build diagnostics even when compilation fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: B55U-FULL-AOSP44-build-diagnostics
+          path: |
+            build-diagnostics/
+            aosp-full-adbd-patch.log
+          if-no-files-found: ignore
+          retention-days: 7
