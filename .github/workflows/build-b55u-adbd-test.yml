@@ -57,7 +57,7 @@ jobs:
           grep -q '^SRCS+= adb.c$' build/source/Makefile
           sed -i '/^SRCS+= adb.c$/a SRCS+= b55u_tls_align.c' build/source/Makefile
           grep -q '^SRCS+= b55u_tls_align.c$' build/source/Makefile
-
+          "$CC" -fno-emulated-tls -c build/source/b55u_tls_align.c -o build/source/b55u_tls_align.o
           make -C build/source -j2 CC="$CC" LDFLAGS="-static -Wl,-u,b55u_tls_align_anchor" LIBS=
           mkdir -p build/out
           cp build/source/adbd build/out/B55U_adbd_fixed_test
