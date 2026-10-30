@@ -56,5 +56,26 @@ segment = segment.replace(old_reg, '''            snprintf(serial, sizeof(serial
 text = text[:i] + segment + text[j:]
 assert text.count('#include <arpa/inet.h>') == 0
 text = text.replace('#include <stdio.h>', '#include <stdio.h>\n#include <arpa/inet.h>\n#include <netinet/in.h>', 1)
+
+# Fix Android 4.4 shell path for B55U.
+services = root / 'services.c'
+code = services.read_text()
+
+old = (
+    '#else\n'
+    '#define SHELL_COMMAND "/bin/sh"\n'
+    '#define SHELL_BASH_COMMAND "/bin/bash"\n'
+    '#endif'
+)
+
+new = old.replace(
+    '#define SHELL_COMMAND "/bin/sh"',
+    '#define SHELL_COMMAND "/system/bin/sh"'
+)
+
+assert code.count(old) == 1, 'Unexpected services.c layout'
+services.write_text(code.replace(old, new, 1))
+
+print('OK: Android shell path /system/bin/sh')
 local.write_text(text)
 print('OK: isolated test port 5556; host-%d serial; close-on-failure; peer 192.168.0.131 only')
