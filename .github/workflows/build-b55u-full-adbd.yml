@@ -145,7 +145,7 @@ jobs:
               rm /aosp/.b55u-write-test
               mkdir -p /aosp/out
               echo B55U_BUILD_WRITABLE_PASS
-              exec /b55u/build_in_container.sh
+              exec /bin/bash /b55u/build_in_container.sh
             ' 2>&1 | tee build-diagnostics/full-build.log
 
       - name: Inspect and package candidate (full build only)
