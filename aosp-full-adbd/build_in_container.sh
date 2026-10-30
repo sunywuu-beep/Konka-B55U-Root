@@ -1,6 +1,6 @@
 #!/bin/bash
 # Execute inside historical KitKat build container, with /aosp mounted as repo root.
-set -euxo pipefail
+set -exo pipefail
 cd /aosp
 printf '\n=== Build environment ===\n'
 uname -a
