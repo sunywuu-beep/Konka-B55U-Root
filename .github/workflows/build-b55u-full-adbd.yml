@@ -163,6 +163,8 @@ jobs:
             | tee build-diagnostics/5556-isolation-patch.log
           grep -q 'B55U_5556_ISOLATED' aosp/system/core/adb/adb.c
           grep -q 'local_init(5556)' aosp/system/core/adb/adb.c
+          grep -q 'JDWP global lists were never initialized' aosp/system/core/adb/sockets.c
+          grep -q 'need JDWP initialization' aosp/system/core/adb/services.c
 
       - name: Rebuild isolated 5556 test daemon (not installed)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_build == true && inputs.isolated_test == true }}
@@ -197,15 +199,19 @@ jobs:
           grep -q 'Machine:.*ARM' test-output/elf-header.txt
           grep -q 'Class:.*ELF32' test-output/elf-header.txt
           ! grep -q 'INTERP ' test-output/elf-program-headers.txt
-          grep -aq 'B55U_5556_ISOLATED' "$BIN"
+          # Check literal error strings that survive compilation/strip,
+          # NOT comment-only source markers (the previous false failure).
+          grep -aFq 'B55U test refuses unauthenticated ADB' "$BIN"
+          grep -aFq 'B55U test requires a pre-approved ADB key file' "$BIN"
           ! cmp -s "$BIN" build-output/B55U_full_AOSP44_adbd_candidate
           sha256sum "$BIN" | tee test-output/sha256.txt
           printf '%s\n' \
-            'TEST ONLY: not for /sbin/adbd, init services, or autorun.' \
+            'TEST ONLY: never install as /sbin/adbd or autorun.' \
             'Only TCP 5556; no 5037 smartsocket, USB, or JDWP control listeners.' \
-            'Preserves RSA checking for already-authorized host keys (ro.adb.secure=1).' \
-            "Only accepts TCP from maintenance PC IPv4: $TEST_PEER_IP" \
-            'Original 5555 adbd remains untouched. Run manually and supervised.' \
+            'RSA checking requires an already-approved host public key (ro.adb.secure=1).' \
+            "Only TCP peer accepted: $TEST_PEER_IP" \
+            'JDWP, reboot, remount, ADB mode changes, backup and restore disabled.' \
+            'Original 5555 adbd must remain running and untouched.' \
             > test-output/READ_FIRST.txt
           cp build-diagnostics/5556-isolation-patch.log test-output/
 
