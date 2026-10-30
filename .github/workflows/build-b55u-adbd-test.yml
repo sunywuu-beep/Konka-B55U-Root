@@ -58,7 +58,7 @@ jobs:
           sed -i '/^SRCS+= adb.c$/a SRCS+= b55u_tls_align.c' build/source/Makefile
           grep -q '^SRCS+= b55u_tls_align.c$' build/source/Makefile
 
-          make -C build/source -j2 CC="$CC" LDFLAGS=-static LIBS=
+          make -C build/source -j2 CC="$CC" LDFLAGS="-static -Wl,-u,b55u_tls_align_anchor" LIBS=
           mkdir -p build/out
           cp build/source/adbd build/out/B55U_adbd_fixed_test
           chmod 755 build/out/B55U_adbd_fixed_test
