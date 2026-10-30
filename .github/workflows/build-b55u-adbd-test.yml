@@ -19,11 +19,15 @@ jobs:
       - name: Checkout branch
         uses: actions/checkout@v4
 
-      - name: Install Android SDK tooling
-        uses: android-actions/setup-android@v3
-
       - name: Install Android NDK (API 19 ARM32)
-        run: sdkmanager --install 'ndk;23.2.8568313'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "ndk;23.2.8568313"
+
 
       - name: Fetch pinned KitKat-derived standalone adbd
         shell: bash
